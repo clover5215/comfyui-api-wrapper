@@ -1,0 +1,12 @@
+{
+  "input": {
+    "s3_lora_bucket": "",
+    "s3_lora_object": "",
+    "prefix": "",
+    "prompts": [""],
+    "s3_generating_bucket": "",
+    "s3_generating_folder": "",
+    "session_id": "",
+    "metadata": {}
+  }
+}
