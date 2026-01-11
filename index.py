@@ -16,8 +16,10 @@ import websocket  # NOTE: websocket-client (https://github.com/websocket-client/
 import uuid
 import json
 import urllib.request
-import os
-import numpy as np
+import base64
+import json
+from openai import OpenAI
+
 
 cloudfront_url = os.getenv("CLOUDFRONT_URL")
 aws_access_key_id = os.getenv("AWS_ACCESS_KEY")
@@ -337,6 +339,11 @@ def responseToWebhook(data, session_id):
         }
 
 
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
 def inference(job):
     """
     Generate the images of the trained instance.
@@ -410,7 +417,9 @@ def inference(job):
         curr_imgs_count = count_objects_in_s3_folder(
             s3_generating_bucket, s3_generating_folder
         )
+        client = OpenAI()
         results = []
+
         for prompt_index, prompt in enumerate(prompts):
             max_attempts = 3  # Maximum number of regeneration attempts
             acceptable_image = False
@@ -449,7 +458,56 @@ def inference(job):
                             max_attempts -= 1
                             continue
 
-                        acceptable_image = True
+                        base64_image = encode_image(first_gen_image_path)
+                        response = client.responses.create(
+                            model="gpt-5.2",
+                            input=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+																					"type": "input_text",
+																					"text": """
+																						Review the attached image for content safety and visual correctness, focusing especially on anatomical anomalies and rendering artifacts produced by image-generation models. Detect the following problems (not exhaustive) and indicate location and confidence where possible:
+
+																						Extra or missing body parts (e.g., six fingers on one hand, three legs, extra arms).
+																						Disconnected or floating limbs, misjoined joints, or duplicated/merged facial features (extra eyes, extra mouths).
+																						Face anomalies (too many/few faces, extra facial features).
+																						Non-human anatomy errors for humans or animals (wrong number of limbs).
+																						Background logic and naturalness (e.g., objects that defy human's everyday life or physics, unnatural poses).
+																						Rendering artifacts (checkerboarding, strange texture repeats, unnatural blurring/smearing, text-shapes where there shouldn't be text).
+																						Copyright watermarks or embedded text/artifacts that indicate model overfitting.
+
+																						Return a single JSON object and nothing else (valid JSON only). Use this exact schema:
+
+																						{
+																							"is_compliant": boolean, // overall allow/reject
+																							"safety_score": integer, // 1-10 (10 = safest)
+																							"flags": [string], // short labels for issues, e.g., "six_fingers", "extra_leg", "duplicate_faces", "texture_artifact"
+																							"requires_manual_review": boolean,
+																							"reasoning": string // short, precise explanation and suggested action
+																						}
+
+																						Rules:
+
+																						If uncertain, set requires_manual_review to true.
+																						Output only the JSON (no extra commentary).
+																					""",
+                                        },
+                                        {
+                                            "type": "input_image",
+                                            "image_url": f"data:image/jpeg;base64,{base64_image}",
+                                        },
+                                    ],
+                                }
+                            ],
+                        )
+                        check_result = json.loads(response.output_text)
+                        acceptable_image = check_result.get("is_compliant", False)
+                        print(
+														f"prompt {prompt_index} attempt {max_attempts} -> Image compliance check result: {check_result}"
+												)
+
                         result = {}
 
                         if acceptable_image:
